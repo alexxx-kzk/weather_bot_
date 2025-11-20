@@ -1,0 +1,157 @@
+import os
+import telebot
+import requests
+import json
+from flask import Flask
+import threading
+
+# Настройки - используем переменные окружения для безопасности
+BOT_TOKEN = os.environ['BOT_TOKEN']  # Теперь через Secrets!
+WEATHER_API_KEY = "d471f3fdf6e8a43384a37b71fe16102b"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
+
+def get_weather(city_name):
+    """Получает реальную погоду по названию города"""
+    try:
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+        response = requests.get(url)
+        data = response.json()
+
+        if data["cod"] != 200:
+            return None
+
+        # Извлекаем данные о погоде
+        city = data["name"]
+        country = data["sys"]["country"]
+        temp = round(data["main"]["temp"])
+        feels_like = round(data["main"]["feels_like"])
+        humidity = data["main"]["humidity"]
+        pressure = data["main"]["pressure"]
+        wind_speed = data["wind"]["speed"]
+        description = data["weather"][0]["description"].capitalize()
+        weather_icon = data["weather"][0]["main"]
+
+        # Преобразуем иконки погоды в эмодзи
+        icon_map = {
+            "Clear": "☀️",
+            "Clouds": "☁️",
+            "Rain": "🌧️",
+            "Drizzle": "🌦️",
+            "Thunderstorm": "⛈️",
+            "Snow": "❄️",
+            "Mist": "🌫️",
+            "Fog": "🌫️"
+        }
+
+        emoji = icon_map.get(weather_icon, "🌤️")
+
+        # Формируем ответ
+        weather_info = (
+            f"{emoji} Погода в {city}, {country}:\n\n"
+            f"• {description}\n"
+            f"• Температура: {temp}°C\n"
+            f"• Ощущается как: {feels_like}°C\n"
+            f"• Влажность: {humidity}%\n"
+            f"• Давление: {pressure} гПа\n"
+            f"• Ветер: {wind_speed} м/с"
+        )
+
+        return weather_info
+
+    except Exception as e:
+        print(f"Ошибка при получении погоды: {e}")
+        return None
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message,
+                 "🌤️ Привет! Я могу тебе написать какая сегодня погода в твоем городе!\n\n"
+                 "Просто напиши мне название города и я покажу текущую погоду.\n\n"
+                 "Примеры:\n"
+                 "• Москва\n"
+                 "• Санкт-Петербург\n"
+                 "• Казань\n"
+                 "• Владимир\n\n"
+                 "Или используй команду /weather")
+
+@bot.message_handler(commands=['help'])
+def send_help(message):
+    bot.reply_to(message,
+                 "Как пользоваться ботом:\n\n"
+                 "1. Просто напиши название города\n"
+                 "2. Или используй команду /weather\n\n"
+                 "Примеры запросов:\n"
+                 "• Москва\n"
+                 "• Санкт-Петербург\n"
+                 "• Казань\n"
+                 "• Владимир\n\n"
+                 "Бот покажет актуальную погоду!")
+
+@bot.message_handler(commands=['weather'])
+def ask_city(message):
+    msg = bot.reply_to(message, "🌍 В каком городе хотите узнать погоду?")
+    bot.register_next_step_handler(msg, process_city)
+
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    user_text = message.text.strip()
+
+    # Игнорируем команды
+    if user_text.startswith('/'):
+        return
+
+    # Обрабатываем как название города
+    process_city(message)
+
+def process_city(message):
+    """Обрабатывает запрос погоды по городу"""
+    try:
+        city_name = message.text.strip()
+
+        if not city_name:
+            bot.reply_to(message, "Пожалуйста, введите название города.")
+            return
+
+        bot.send_chat_action(message.chat.id, 'typing')
+
+        # Получаем погоду
+        weather_info = get_weather(city_name)
+
+        if weather_info:
+            bot.reply_to(message, weather_info)
+        else:
+            bot.reply_to(message,
+                         f"❌ Не удалось найти погоду для города '{city_name}'.\n"
+                         f"Проверьте:\n"
+                         "• Правильность написания\n"
+                         "• Попробуйте английское название\n"
+                         "• Или укажите страну: 'Москва, RU'")
+
+    except Exception as e:
+        bot.reply_to(message, "⚠️ Произошла ошибка. Попробуйте позже.")
+
+# Web-сервер для UptimeRobot
+@app.route('/')
+def home():
+    return "✅ Погодный бот активен!"
+
+@app.route('/ping')
+def ping():
+    return "pong"
+
+# Запуск бота в отдельном потоке
+def run_bot():
+    print("🟢 Погодный бот запущен...")
+    bot.polling(none_stop=True)
+
+# Главная функция
+if __name__ == "__main__":
+    # Запускаем бота в фоне
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем web-сервер
+    print("🚀 Web-сервер запускается...")
+    app.run(host='0.0.0.0', port=5000)
